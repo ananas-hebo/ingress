@@ -20,6 +20,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
@@ -90,6 +91,12 @@ func AddOrUpdateCertAndKey(name string, cert, key, ca []byte) (*ingress.SSLCert,
 		return nil, err
 	}
 
+	//Ensure that certificate and private key have a matching public key
+	if _, err := tls.X509KeyPair(cert, key); err != nil {
+		_ = os.Remove(tempPemFile.Name())
+		return nil, err
+	}
+
 	cn := []string{pemCert.Subject.CommonName}
 	if len(pemCert.DNSNames) > 0 {
 		cn = append(cn, pemCert.DNSNames...)
@@ -131,6 +138,7 @@ func AddOrUpdateCertAndKey(name string, cert, key, ca []byte) (*ingress.SSLCert,
 			PemFileName: pemFileName,
 			PemSHA:      PemSHA1(pemFileName),
 			CN:          cn,
+			ExpireTime:  pemCert.NotAfter,
 		}, nil
 	}
 
@@ -138,6 +146,7 @@ func AddOrUpdateCertAndKey(name string, cert, key, ca []byte) (*ingress.SSLCert,
 		PemFileName: pemFileName,
 		PemSHA:      PemSHA1(pemFileName),
 		CN:          cn,
+		ExpireTime:  pemCert.NotAfter,
 	}, nil
 }
 
