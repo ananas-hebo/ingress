@@ -48,7 +48,7 @@ const (
 
 	gzipTypes = "application/atom+xml application/javascript application/x-javascript application/json application/rss+xml application/vnd.ms-fontobject application/x-font-ttf application/x-web-app-manifest+json application/xhtml+xml application/xml font/opentype image/svg+xml image/x-icon text/css text/plain text/x-component"
 
-	logFormatUpstream = `%v - [$the_x_forwarded_for] - $remote_user [$time_local] "$request" $status $body_bytes_sent "$http_referer" "$http_user_agent" $request_length $request_time [$proxy_upstream_name] $upstream_addr $upstream_response_length $upstream_response_time $upstream_status`
+	logFormatUpstream = `%v - [$the_real_ip] - $remote_user [$time_local] "$request" $status $body_bytes_sent "$http_referer" "$http_user_agent" $request_length $request_time [$proxy_upstream_name] $upstream_addr $upstream_response_length $upstream_response_time $upstream_status`
 
 	logFormatStream = `[$time_local] $protocol $status $bytes_sent $bytes_received $session_time`
 
@@ -293,6 +293,14 @@ type Configuration struct {
 	// Sets the maximum size of the variables hash table.
 	// http://nginx.org/en/docs/http/ngx_http_map_module.html#variables_hash_max_size
 	VariablesHashMaxSize int `json:"variables-hash-max-size,omitempty"`
+
+	// Activates the cache for connections to upstream servers.
+	// The connections parameter sets the maximum number of idle keepalive connections to
+	// upstream servers that are preserved in the cache of each worker process. When this
+	// number is exceeded, the least recently used connections are closed.
+	// http://nginx.org/en/docs/http/ngx_http_upstream_module.html#keepalive
+	// Default: 0 (disabled)
+	UpstreamKeepaliveConnections int `json:"upstream-keepalive-connections,omitempty"`
 }
 
 // NewDefault returns the default nginx configuration
@@ -351,6 +359,7 @@ func NewDefault() Configuration {
 			WhitelistSourceRange: []string{},
 			SkipAccessLogURLs:    []string{},
 		},
+		UpstreamKeepaliveConnections: 0,
 	}
 
 	if glog.V(5) {
@@ -365,7 +374,7 @@ func NewDefault() Configuration {
 // is enabled.
 func (cfg Configuration) BuildLogFormatUpstream() string {
 	if cfg.LogFormatUpstream == logFormatUpstream {
-		return fmt.Sprintf(cfg.LogFormatUpstream, "$the_x_forwarded_for")
+		return fmt.Sprintf(cfg.LogFormatUpstream, "$the_real_ip")
 	}
 
 	return cfg.LogFormatUpstream

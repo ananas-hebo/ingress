@@ -110,7 +110,11 @@ type GenericController struct {
 
 	stopCh chan struct{}
 
+	// runningConfig contains the running configuration in the Backend
 	runningConfig *ingress.Configuration
+
+	// configmapChanged indicates the configmap
+	configmapChanged bool
 }
 
 // Configuration contains all the settings required by an Ingress controller
@@ -258,6 +262,7 @@ func newIngressController(config *Configuration) *GenericController {
 			if mapKey == ic.cfg.ConfigMapName {
 				glog.V(2).Infof("adding configmap %v to backend", mapKey)
 				ic.cfg.Backend.SetConfig(upCmap)
+				ic.configmapChanged = true
 			}
 		},
 		UpdateFunc: func(old, cur interface{}) {
@@ -267,6 +272,7 @@ func newIngressController(config *Configuration) *GenericController {
 				if mapKey == ic.cfg.ConfigMapName {
 					glog.V(2).Infof("updating configmap backend (%v)", mapKey)
 					ic.cfg.Backend.SetConfig(upCmap)
+					ic.configmapChanged = true
 				}
 				// updates to configuration configmaps can trigger an update
 				if mapKey == ic.cfg.ConfigMapName || mapKey == ic.cfg.TCPConfigMapName || mapKey == ic.cfg.UDPConfigMapName {
@@ -413,7 +419,7 @@ func (ic *GenericController) syncIngress(key interface{}) error {
 		PassthroughBackends: passUpstreams,
 	}
 
-	if ic.runningConfig != nil && ic.runningConfig.Equal(&pcfg) {
+	if !ic.configmapChanged && (ic.runningConfig != nil && ic.runningConfig.Equal(&pcfg)) {
 		glog.V(3).Infof("skipping backend reload (no changes detected)")
 		return nil
 	}
@@ -427,6 +433,7 @@ func (ic *GenericController) syncIngress(key interface{}) error {
 		return err
 	}
 
+	ic.configmapChanged = false
 	glog.Infof("ingress backend successfully reloaded...")
 	incReloadCount()
 	setSSLExpireTime(servers)
@@ -596,6 +603,8 @@ func (ic *GenericController) getBackendServers() ([]*ingress.Backend, []*ingress
 	for _, ingIf := range ings {
 		ing := ingIf.(*extensions.Ingress)
 
+		affinity := ic.annotations.SessionAffinity(ing)
+
 		if !class.IsValid(ing, ic.cfg.IngressClass, ic.cfg.DefaultIngressClass) {
 			continue
 		}
@@ -664,6 +673,22 @@ func (ic *GenericController) getBackendServers() ([]*ingress.Backend, []*ingress
 					}
 					mergeLocationAnnotations(loc, anns)
 					server.Locations = append(server.Locations, loc)
+				}
+
+				if ups.SessionAffinity.AffinityType == "" {
+					ups.SessionAffinity.AffinityType = affinity.AffinityType
+				}
+
+				if affinity.AffinityType == "cookie" {
+					ups.SessionAffinity.CookieSessionAffinity.Name = affinity.CookieConfig.Name
+					ups.SessionAffinity.CookieSessionAffinity.Hash = affinity.CookieConfig.Hash
+
+					locs := ups.SessionAffinity.CookieSessionAffinity.Locations
+					if _, ok := locs[host]; !ok {
+						locs[host] = []string{}
+					}
+
+					locs[host] = append(locs[host], path.Path)
 				}
 			}
 		}
@@ -751,7 +776,6 @@ func (ic *GenericController) createUpstreams(data []interface{}) map[string]*ing
 
 		secUpstream := ic.annotations.SecureUpstream(ing)
 		hz := ic.annotations.HealthCheck(ing)
-		affinity := ic.annotations.SessionAffinity(ing)
 
 		var defBackend string
 		if ing.Spec.Backend != nil {
@@ -791,15 +815,9 @@ func (ic *GenericController) createUpstreams(data []interface{}) map[string]*ing
 				if !upstreams[name].Secure {
 					upstreams[name].Secure = secUpstream.Secure
 				}
+
 				if upstreams[name].SecureCACert.Secret == "" {
 					upstreams[name].SecureCACert = secUpstream.CACert
-				}
-				if upstreams[name].SessionAffinity.AffinityType == "" {
-					upstreams[name].SessionAffinity.AffinityType = affinity.AffinityType
-					if affinity.AffinityType == "cookie" {
-						upstreams[name].SessionAffinity.CookieSessionAffinity.Name = affinity.CookieConfig.Name
-						upstreams[name].SessionAffinity.CookieSessionAffinity.Hash = affinity.CookieConfig.Hash
-					}
 				}
 
 				svcKey := fmt.Sprintf("%v/%v", ing.GetNamespace(), path.Backend.ServiceName)
